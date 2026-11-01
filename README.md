@@ -7,7 +7,7 @@ fait environ 200 Ko.
 
 ## Télécharger
 
-**[Télécharger l'APK (version 0.6)](https://github.com/s1pierro/simpletones/releases/download/v0.6/synthe-aaudio-0.6.apk)**
+**[Télécharger l'APK (version 0.7)](https://github.com/s1pierro/simpletones/releases/download/v0.7/simpletones-0.7.apk)**
 
 Pour les appareils ARM 64 bits, sous Android 8.0 ou plus récent. L'APK étant
 signé avec une clé de debug, Android demandera d'autoriser l'installation depuis
