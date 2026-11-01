@@ -5,8 +5,10 @@
 //!   ┌────────────────────────┬───────────────┐
 //!   │ diagnostic audio       │ curseur ATTAQUE│
 //!   │                        │ curseur RELACHE│
+//!   │                        │ curseur NOTE BASSE
+//!   │                        │ curseur ETENDUE│
 //!   ├────────────────────────┴───────────────┤
-//!   │ clavier : 15 touches, Do4 → Do6         │
+//!   │ clavier configurable (défaut : Do4 → Do6)│
 //!   └────────────────────────────────────────┘
 
 use crate::audio::Stats;
@@ -32,18 +34,86 @@ const ACCENT: u32 = rgb(0x4C, 0x9E, 0xF2);
 // Clavier
 // ---------------------------------------------------------------------------
 
-/// Clavier chromatique de Do4 à Do6 : 25 touches, indexées par demi-ton (0 = Do4).
-pub const KEYS: usize = 25;
-/// Touches blanches visibles (2 octaves + le Do final).
-const WHITES: usize = 15;
+// Une note se repère en demi-tons depuis Do0 (Do4 = 48), une touche blanche par
+// son rang parmi les blanches depuis Do0 (Do4 = 28).
+
+/// Notes possibles : de Do0 à Do8.
+pub const NOTES: usize = 97;
+/// Touches au plus sur le clavier : 4 octaves + la note finale.
+const MAX_KEYS: usize = 49;
+const WHITE_LOWEST: usize = 7; // Do1
+const WHITE_HIGHEST: usize = 56; // Do8 : au-delà, les harmoniques approchent de Nyquist
+const WHITES_MIN: usize = 5;
+const WHITES_MAX: usize = 29;
+/// La note basse la plus aiguë possible (clavier le plus court, finissant au Do8).
+const LOW_MAX: usize = WHITE_HIGHEST + 1 - WHITES_MIN;
+
+/// Le clavier commence et finit sur une blanche : une noire au bord serait coupée.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Keyboard {
+    /// Rang de la blanche la plus grave.
+    pub low: usize,
+    /// Nombre de touches blanches.
+    pub whites: usize,
+}
+
+impl Keyboard {
+    /// Do4 → Do6 : les petits haut-parleurs de tablette rendent mal les graves.
+    pub const DEFAULT: Keyboard = Keyboard { low: 28, whites: 15 };
+
+    /// Réglages relus d'un fichier : rien ne garantit qu'ils soient valides.
+    pub fn sanitized(low: usize, whites: usize) -> Keyboard {
+        Keyboard { low: Keyboard::DEFAULT.low, whites: whites.clamp(WHITES_MIN, WHITES_MAX) }.with_low(low)
+    }
+
+    fn with_low(self, low: usize) -> Keyboard {
+        Keyboard { low: low.clamp(WHITE_LOWEST, WHITE_HIGHEST + 1 - self.whites), ..self }
+    }
+
+    fn with_whites(self, whites: usize) -> Keyboard {
+        Keyboard { whites: whites.clamp(WHITES_MIN, WHITES_MAX.min(WHITE_HIGHEST + 1 - self.low)), ..self }
+    }
+
+    /// Applique la position 0..1 du curseur `i` (SLIDER_LOW ou SLIDER_SPAN).
+    /// Un curseur s'arrête quand la note la plus aiguë atteint Do8.
+    pub fn with_slider(self, i: usize, t: f32) -> Keyboard {
+        let step = |lo: usize, hi: usize| lo + (t.clamp(0.0, 1.0) * (hi - lo) as f32).round() as usize;
+        if i == SLIDER_LOW {
+            self.with_low(step(WHITE_LOWEST, LOW_MAX))
+        } else {
+            self.with_whites(step(WHITES_MIN, WHITES_MAX))
+        }
+    }
+
+    fn slider_pos(&self, i: usize) -> f32 {
+        if i == SLIDER_LOW {
+            (self.low - WHITE_LOWEST) as f32 / (LOW_MAX - WHITE_LOWEST) as f32
+        } else {
+            (self.whites - WHITES_MIN) as f32 / (WHITES_MAX - WHITES_MIN) as f32
+        }
+    }
+
+    fn first_semi(&self) -> usize {
+        white_semi(self.low)
+    }
+
+    fn last_semi(&self) -> usize {
+        white_semi(self.low + self.whites - 1)
+    }
+}
+
 /// Demi-tons des touches blanches dans une octave.
 const WHITE_STEPS: [usize; 7] = [0, 2, 4, 5, 7, 9, 11];
 const NAMES: [&str; 7] = ["DO", "RE", "MI", "FA", "SOL", "LA", "SI"];
 
-/// Fréquence du demi-ton `i`, à partir du Do4 (261,6 Hz) : les petits
-/// haut-parleurs de tablette rendent mal les graves.
-pub fn key_freq(i: usize) -> f32 {
-    261.63 * 2f32.powf(i as f32 / 12.0)
+/// Fréquence de la note `semi`, le Do4 valant 261,6 Hz.
+pub fn key_freq(semi: usize) -> f32 {
+    261.63 * 2f32.powf((semi as f32 - 48.0) / 12.0)
+}
+
+/// Nom d'une touche blanche, octave comprise : « SOL4 ».
+fn white_name(j: usize) -> String {
+    format!("{}{}", NAMES[j % 7], j / 7)
 }
 
 fn is_black(semi: usize) -> bool {
@@ -65,10 +135,13 @@ fn white_semi(j: usize) -> usize {
 // Curseurs (échelle logarithmique)
 // ---------------------------------------------------------------------------
 
-pub const SLIDERS: usize = 2;
-const SLIDER_LABEL: [&str; SLIDERS] = ["ATTAQUE", "RELACHE"];
+pub const SLIDERS: usize = 4;
+/// Les premiers curseurs règlent une durée, les suivants le clavier.
+pub const TIME_SLIDERS: usize = 2;
+const SLIDER_LOW: usize = 2;
+const SLIDER_LABEL: [&str; SLIDERS] = ["ATTAQUE", "RELACHE", "NOTE BASSE", "ETENDUE"];
 /// Bornes en secondes.
-const SLIDER_RANGE: [(f32, f32); SLIDERS] = [(0.002, 2.0), (0.01, 4.0)];
+const SLIDER_RANGE: [(f32, f32); TIME_SLIDERS] = [(0.002, 2.0), (0.01, 4.0)];
 
 /// Position du curseur (0..1) → valeur en secondes.
 pub fn slider_value(i: usize, t: f32) -> f32 {
@@ -113,12 +186,15 @@ pub struct Layout {
     /// Zone tactile de chaque curseur (généreuse) et sa piste visible.
     pub slider_zone: [Rect; SLIDERS],
     pub slider_track: [Rect; SLIDERS],
-    /// Rectangle visible de chaque touche, indexé par demi-ton.
-    pub keys: [Rect; KEYS],
+    pub kb: Keyboard,
+    /// Rectangle visible de chaque touche, indexé depuis la note la plus grave.
+    pub keys: [Rect; MAX_KEYS],
+    /// Touches réellement présentes dans `keys`.
+    pub count: usize,
     pub gap: usize,
 }
 
-pub fn layout(w: usize, h: usize) -> Layout {
+pub fn layout(w: usize, h: usize, kb: Keyboard) -> Layout {
     let kb_top = h / 2;
     // Texte : ~40 caractères sur 58 % de la largeur, 10 lignes dans la moitié haute.
     let scale = ((w * 58 / 100) / (40 * (font::W + 1))).min(kb_top / (10 * (font::H + 3))).max(1);
@@ -134,25 +210,31 @@ pub fn layout(w: usize, h: usize) -> Layout {
     for i in 0..SLIDERS {
         let ry = i * row_h;
         slider_zone[i] = Rect { x: sx, y: ry, w: w - sx, h: row_h };
-        slider_track[i] = Rect { x: sx, y: ry + margin / 2 + label_h + 3 * scale, w: sw, h: track_h };
+        slider_track[i] = Rect { x: sx, y: ry + margin / 4 + label_h + scale, w: sw, h: track_h };
     }
 
     // Clavier : blanches sur toute la hauteur, noires sur ~60 % en haut,
     // centrées sur la jonction entre deux blanches.
-    let gap = scale.max(2);
-    let ww = w / WHITES;
+    let ww = w / kb.whites;
+    let gap = scale.max(2).min(ww / 8).max(1);
     let kb_h = h - kb_top;
     let bw = ww * 62 / 100;
-    let mut keys = [Rect { x: 0, y: 0, w: 0, h: 0 }; KEYS];
-    for (k, r) in keys.iter_mut().enumerate() {
-        let j = white_index(k);
-        *r = if is_black(k) {
-            Rect { x: (j + 1) * ww - bw / 2, y: kb_top + gap, w: bw, h: kb_h * 58 / 100 }
+    // Bord gauche de la j-ième blanche : les blanches occupent toute la largeur.
+    let edge = |j: usize| j * w / kb.whites;
+    let first = kb.first_semi();
+    let count = kb.last_semi() - first + 1;
+    let mut keys = [Rect { x: 0, y: 0, w: 0, h: 0 }; MAX_KEYS];
+    for (i, r) in keys.iter_mut().take(count).enumerate() {
+        let semi = first + i;
+        let j = white_index(semi) - kb.low;
+        *r = if is_black(semi) {
+            Rect { x: edge(j + 1) - bw / 2, y: kb_top + gap, w: bw, h: kb_h * 58 / 100 }
         } else {
-            Rect { x: j * ww + gap, y: kb_top + gap, w: ww - 2 * gap, h: kb_h - 2 * gap }
+            let key_w = (edge(j + 1) - edge(j)).saturating_sub(2 * gap);
+            Rect { x: edge(j) + gap, y: kb_top + gap, w: key_w, h: kb_h.saturating_sub(2 * gap) }
         };
     }
-    Layout { w, h, scale, margin, kb_top, slider_zone, slider_track, keys, gap }
+    Layout { w, h, scale, margin, kb_top, slider_zone, slider_track, kb, keys, count, gap }
 }
 
 pub enum Hit {
@@ -169,11 +251,12 @@ impl Layout {
         }
         if y >= self.kb_top as f32 {
             // Les noires sont devant les blanches : on les teste d'abord.
-            if let Some(k) = (0..KEYS).find(|&k| is_black(k) && self.keys[k].contains(x, y)) {
-                return Hit::Key(k);
+            let first = self.kb.first_semi();
+            if let Some(i) = (0..self.count).find(|&i| is_black(first + i) && self.keys[i].contains(x, y)) {
+                return Hit::Key(first + i);
             }
-            let j = (x.max(0.0) as usize * WHITES / self.w).min(WHITES - 1);
-            return Hit::Key(white_semi(j));
+            let j = (x.max(0.0) as usize * self.kb.whites / self.w).min(self.kb.whites - 1);
+            return Hit::Key(white_semi(self.kb.low + j));
         }
         for i in 0..SLIDERS {
             if self.slider_zone[i].contains(x, y) {
@@ -192,10 +275,12 @@ impl Layout {
 /// Ce que l'interface doit afficher en plus des statistiques audio.
 #[derive(Clone)]
 pub struct View {
-    pub held: [bool; KEYS],
+    /// Notes tenues, indexées par demi-ton depuis Do0.
+    pub held: [bool; NOTES],
     pub held_count: usize,
-    /// Valeurs des curseurs en secondes.
-    pub sliders: [f32; SLIDERS],
+    /// Valeurs des curseurs de durée, en secondes.
+    pub sliders: [f32; TIME_SLIDERS],
+    pub kb: Keyboard,
 }
 
 pub struct Canvas<'a> {
@@ -237,7 +322,7 @@ fn text_width(s: &str, scale: usize) -> usize {
 }
 
 pub fn render(cv: &mut Canvas, st: &Stats, view: &View) {
-    let l = layout(cv.w, cv.h);
+    let l = layout(cv.w, cv.h, view.kb);
     let (w, h, scale) = (l.w, l.h, l.scale);
     cv.rect(Rect { x: 0, y: 0, w, h }, BG);
 
@@ -250,7 +335,7 @@ pub fn render(cv: &mut Canvas, st: &Stats, view: &View) {
         *y += line;
     };
 
-    put(cv, &mut y, "SYNTHE AAUDIO 0.3", TEXT);
+    put(cv, &mut y, concat!("SYNTHE AAUDIO ", env!("CARGO_PKG_VERSION")), TEXT);
     y += line / 3;
     if let Some(err) = &st.error {
         put(cv, &mut y, &format!("ERREUR : {err}"), BAD);
@@ -282,16 +367,25 @@ pub fn render(cv: &mut Canvas, st: &Stats, view: &View) {
         }
     }
     y += line / 3;
-    put(cv, &mut y, &format!("NOTES TENUES : {}", view.held_count), if view.held_count > 0 { ACCENT } else { DIM });
+    let top = view.kb.low + view.kb.whites - 1;
+    let clavier = format!("{} A {} - NOTES TENUES : {}", white_name(view.kb.low), white_name(top), view.held_count);
+    put(cv, &mut y, &clavier, if view.held_count > 0 { ACCENT } else { DIM });
 
     // --- Curseurs ---------------------------------------------------------
     for i in 0..SLIDERS {
         let zone = l.slider_zone[i];
         let track = l.slider_track[i];
-        let label = format!("{} : {}", SLIDER_LABEL[i], fmt_time(view.sliders[i]));
-        cv.text(track.x, zone.y + l.margin / 2, &label, scale, TEXT);
+        let (value, pos) = if i < TIME_SLIDERS {
+            (fmt_time(view.sliders[i]), slider_pos(i, view.sliders[i]))
+        } else if i == SLIDER_LOW {
+            (white_name(view.kb.low), view.kb.slider_pos(i))
+        } else {
+            (format!("{} BLANCHES", view.kb.whites), view.kb.slider_pos(i))
+        };
+        let label = format!("{} : {value}", SLIDER_LABEL[i]);
+        cv.text(track.x, zone.y + l.margin / 4, &label, scale, TEXT);
         cv.rect(track, KEY_ALT);
-        let fill = (slider_pos(i, view.sliders[i]) * track.w as f32) as usize;
+        let fill = (pos * track.w as f32) as usize;
         cv.rect(Rect { w: fill, ..track }, ACCENT);
         let knob = 4 * scale;
         let kx = (track.x + fill).saturating_sub(knob / 2).min(track.x + track.w - knob / 2);
@@ -299,19 +393,130 @@ pub fn render(cv: &mut Canvas, st: &Stats, view: &View) {
     }
 
     // --- Clavier ----------------------------------------------------------
-    for k in (0..KEYS).filter(|&k| !is_black(k)) {
-        let key = l.keys[k];
-        cv.rect(key, if view.held[k] { ACCENT } else { KEY_WHITE });
-        let name = NAMES[white_index(k) % 7];
-        let nx = key.x + key.w.saturating_sub(text_width(name, scale)) / 2;
-        let ny = key.y + key.h.saturating_sub((font::H + 6) * scale);
-        cv.text(nx, ny, name, scale, if view.held[k] { BG } else { DIM });
+    let first = view.kb.first_semi();
+    // Touches trop étroites pour tous les noms : seuls les Do restent indiqués.
+    let all_names = text_width("SOL", scale) <= l.keys[0].w;
+    for i in (0..l.count).filter(|&i| !is_black(first + i)) {
+        let (semi, key) = (first + i, l.keys[i]);
+        let held = view.held[semi];
+        cv.rect(key, if held { ACCENT } else { KEY_WHITE });
+        let j = white_index(semi);
+        let name = NAMES[j % 7];
+        if (all_names || j % 7 == 0) && text_width(name, scale) <= key.w {
+            let nx = key.x + key.w.saturating_sub(text_width(name, scale)) / 2;
+            let ny = key.y + key.h.saturating_sub((font::H + 6) * scale);
+            cv.text(nx, ny, name, scale, if held { BG } else { DIM });
+        }
     }
-    for k in (0..KEYS).filter(|&k| is_black(k)) {
-        let key = l.keys[k];
+    for i in (0..l.count).filter(|&i| is_black(first + i)) {
+        let key = l.keys[i];
         // Liseré couleur de fond pour détacher la noire des blanches voisines.
         let g = l.gap;
-        cv.rect(Rect { x: key.x - g, y: key.y, w: key.w + 2 * g, h: key.h + g }, BG);
-        cv.rect(key, if view.held[k] { ACCENT } else { KEY_BLACK });
+        cv.rect(Rect { x: key.x.saturating_sub(g), y: key.y, w: key.w + 2 * g, h: key.h + g }, BG);
+        cv.rect(key, if view.held[first + i] { ACCENT } else { KEY_BLACK });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tous les claviers atteignables, curseurs aux quatre coins compris.
+    fn all_keyboards() -> Vec<Keyboard> {
+        let mut v = Vec::new();
+        for low in 0..=70 {
+            for whites in 0..=40 {
+                let kb = Keyboard::sanitized(low, whites);
+                if !v.contains(&kb) {
+                    v.push(kb);
+                }
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn defaut_identique_a_la_version_precedente() {
+        let kb = Keyboard::DEFAULT;
+        assert_eq!((kb.first_semi(), kb.last_semi()), (48, 72));
+        assert_eq!(layout(2000, 1200, kb).count, 25);
+        assert!((key_freq(48) - 261.63).abs() < 0.01);
+        assert!((key_freq(57) - 440.0).abs() < 0.1);
+        assert_eq!(white_name(kb.low), "DO4");
+        assert_eq!(white_name(kb.low + kb.whites - 1), "DO6");
+    }
+
+    #[test]
+    fn bornes_respectees() {
+        for kb in all_keyboards() {
+            assert!(kb.low >= WHITE_LOWEST && kb.low + kb.whites - 1 <= WHITE_HIGHEST, "{kb:?}");
+            assert!((WHITES_MIN..=WHITES_MAX).contains(&kb.whites), "{kb:?}");
+            assert!(kb.last_semi() < NOTES);
+            assert!(kb.last_semi() - kb.first_semi() < MAX_KEYS, "{kb:?}");
+            assert!(!is_black(kb.first_semi()) && !is_black(kb.last_semi()));
+        }
+    }
+
+    #[test]
+    fn curseurs_s_arretent_a_do8() {
+        let kb = Keyboard::DEFAULT.with_slider(SLIDER_LOW, 1.0);
+        assert_eq!(kb.low + kb.whites - 1, WHITE_HIGHEST);
+        assert_eq!(kb.with_slider(3, 1.0), kb); // plus de place vers l'aigu
+        let grave = Keyboard::DEFAULT.with_slider(SLIDER_LOW, 0.0);
+        assert_eq!(grave.low, WHITE_LOWEST);
+        assert_eq!(grave.with_slider(3, 1.0).whites, WHITES_MAX);
+        assert_eq!(grave.with_slider(3, 0.0).whites, WHITES_MIN);
+    }
+
+    #[test]
+    fn position_du_curseur_fait_l_aller_retour() {
+        for kb in all_keyboards() {
+            for i in [SLIDER_LOW, 3] {
+                assert_eq!(kb.with_slider(i, kb.slider_pos(i)), kb, "curseur {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn toutes_les_touches_visibles_et_touchables() {
+        for (w, h) in [(2000, 1200), (2400, 1080), (800, 480), (1, 1)] {
+            for kb in all_keyboards() {
+                let l = layout(w, h, kb);
+                let first = kb.first_semi();
+                for i in 0..l.count {
+                    let r = l.keys[i];
+                    assert!(r.x + r.w <= w, "{kb:?} touche {i} deborde en {w}x{h}");
+                    if r.w == 0 || r.h == 0 {
+                        continue;
+                    }
+                    let (cx, cy) = ((r.x + r.w / 2) as f32, (r.y + r.h - 1) as f32);
+                    if w > 100 {
+                        // Le bas d'une noire tombe sur elle, celui d'une blanche aussi.
+                        assert!(matches!(l.hit(cx, cy), Hit::Key(s) if s == first + i), "{kb:?} touche {i}");
+                    }
+                }
+                // Partout sur la largeur, le doigt tombe sur une note du clavier.
+                for x in (0..w).step_by(7) {
+                    for y in [l.kb_top, h - 1] {
+                        if let Hit::Key(s) = l.hit(x as f32, y as f32) {
+                            assert!(s >= first && s <= kb.last_semi(), "{kb:?} note {s}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rendu_sans_debordement() {
+        let st = Stats::default();
+        for (w, h) in [(2000, 1200), (800, 480)] {
+            for kb in all_keyboards() {
+                let mut px = vec![0u32; w * h];
+                let mut cv = Canvas { px: &mut px, w, h, stride: w };
+                let view = View { held: [true; NOTES], held_count: 3, sliders: [0.01, 0.4], kb };
+                render(&mut cv, &st, &view);
+            }
+        }
     }
 }

@@ -1,8 +1,8 @@
-//! Synthé AAudio 0.2 : polyphonique, notes tenues, enveloppe réglable.
+//! Synthé AAudio : polyphonique, notes tenues, enveloppe et clavier réglables.
 //!
 //! - Un doigt posé = une note tenue ; levé = relâche. Plusieurs doigts = accord.
 //! - Glisser d'une touche à l'autre change de note sans lever le doigt.
-//! - Curseurs ATTAQUE et RELACHE en haut à droite.
+//! - Curseurs ATTAQUE, RELACHE, NOTE BASSE et ETENDUE en haut à droite.
 //!
 //! Trois threads :
 //! - principal : événements tactiles → file sans verrou vers l'audio (aucun dessin ici,
@@ -18,7 +18,8 @@ mod font;
 mod synth;
 mod ui;
 
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr};
+use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, Once};
@@ -134,7 +135,8 @@ struct Input {
     width: usize,
     height: usize,
     fingers: [Finger; MAX_POINTERS],
-    sliders: [f32; ui::SLIDERS],
+    sliders: [f32; ui::TIME_SLIDERS],
+    kb: ui::Keyboard,
 }
 
 static INPUT: Mutex<Input> = Mutex::new(Input {
@@ -142,6 +144,7 @@ static INPUT: Mutex<Input> = Mutex::new(Input {
     height: 0,
     fingers: [Finger::Up; MAX_POINTERS],
     sliders: [0.01, 0.4], // mêmes valeurs par défaut que le synthé
+    kb: ui::Keyboard::DEFAULT,
 });
 
 /// Quelque chose a changé à l'écran : le thread de rendu redessinera.
@@ -149,7 +152,7 @@ static DIRTY: AtomicBool = AtomicBool::new(true);
 
 impl Input {
     fn view(&self) -> ui::View {
-        let mut held = [false; ui::KEYS];
+        let mut held = [false; ui::NOTES];
         let mut held_count = 0;
         for f in &self.fingers {
             if let Finger::Key(k) = f {
@@ -157,15 +160,19 @@ impl Input {
                 held_count += 1;
             }
         }
-        ui::View { held, held_count, sliders: self.sliders }
+        ui::View { held, held_count, sliders: self.sliders, kb: self.kb }
     }
 
     fn set_slider(&mut self, i: usize, t: f32) {
-        let v = ui::slider_value(i, t);
-        self.sliders[i] = v;
-        match i {
-            0 => synth::set_attack(v),
-            _ => synth::set_release(v),
+        if i < ui::TIME_SLIDERS {
+            let v = ui::slider_value(i, t);
+            self.sliders[i] = v;
+            match i {
+                0 => synth::set_attack(v),
+                _ => synth::set_release(v),
+            }
+        } else {
+            self.kb = self.kb.with_slider(i, t);
         }
         DIRTY.store(true, Ordering::Relaxed);
     }
@@ -175,7 +182,7 @@ impl Input {
         if id >= MAX_POINTERS {
             return;
         }
-        let layout = ui::layout(self.width, self.height);
+        let layout = ui::layout(self.width, self.height, self.kb);
         let hit = layout.hit(x, y);
         let prev = self.fingers[id];
         let next = match (prev, hit) {
@@ -224,6 +231,34 @@ impl Input {
         synth::all_off();
         self.fingers = [Finger::Up; MAX_POINTERS];
         DIRTY.store(true, Ordering::Relaxed);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Réglages du clavier, conservés d'un lancement à l'autre
+// ---------------------------------------------------------------------------
+
+/// Fichier texte « <rang de la note basse> <nombre de blanches> ».
+static CONFIG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn load_config(dir: *const i8) {
+    if dir.is_null() {
+        return;
+    }
+    let path = PathBuf::from(unsafe { CStr::from_ptr(dir as *const _) }.to_string_lossy().into_owned()).join("clavier.txt");
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        let mut nums = text.split_whitespace().map(str::parse::<usize>);
+        if let (Some(Ok(low)), Some(Ok(whites))) = (nums.next(), nums.next()) {
+            INPUT.lock().unwrap().kb = ui::Keyboard::sanitized(low, whites);
+        }
+    }
+    *CONFIG_PATH.lock().unwrap() = Some(path);
+}
+
+fn save_config() {
+    let kb = INPUT.lock().unwrap().kb;
+    if let Some(path) = &*CONFIG_PATH.lock().unwrap() {
+        let _ = std::fs::write(path, format!("{} {}\n", kb.low, kb.whites));
     }
 }
 
@@ -288,6 +323,7 @@ unsafe extern "C" fn on_resume(_: *mut ANativeActivity) {
 unsafe extern "C" fn on_pause(_: *mut ANativeActivity) {
     INPUT.lock().unwrap().lift_all();
     audio::stop();
+    save_config();
 }
 
 unsafe fn update_size(window: *mut ANativeWindow) {
@@ -361,6 +397,7 @@ unsafe extern "C" fn on_queue_destroyed(_: *mut ANativeActivity, queue: *mut AIn
 /// Appelé uniquement par Android, avec une activité valide.
 #[no_mangle]
 pub unsafe extern "C" fn ANativeActivity_onCreate(activity: *mut ANativeActivity, _: *mut c_void, _: usize) {
+    load_config((*activity).internal_data_path);
     let cb = &mut *(*activity).callbacks;
     cb.on_resume = Some(on_resume);
     cb.on_pause = Some(on_pause);
