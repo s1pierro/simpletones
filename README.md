@@ -31,7 +31,7 @@ avec le Rust natif de Termux : pas de SDK ni de NDK, pas de cross-compilation.
     pkg install rust aapt apksigner zip unzip curl openjdk-17
     ./build.sh
 
-L'APK est produit dans `dist/audiotest.apk`. `./build.sh install` le construit
+L'APK est produit dans `dist/simpletones.apk`. `./build.sh install` le construit
 puis ouvre l'installeur Android.
 
 Au premier lancement, `build.sh` télécharge `android.jar` depuis le dépôt du SDK

@@ -358,7 +358,7 @@ pub fn render(cv: &mut Canvas, st: &Stats, view: &View) {
         *y += line;
     };
 
-    put(cv, &mut y, concat!("SYNTHE AAUDIO ", env!("CARGO_PKG_VERSION")), TEXT);
+    put(cv, &mut y, concat!("SIMPLETONES ", env!("CARGO_PKG_VERSION")), TEXT);
     y += line / 3;
     if let Some(err) = &st.error {
         put(cv, &mut y, &format!("ERREUR : {err}"), BAD);

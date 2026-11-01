@@ -1,4 +1,4 @@
-//! Synthé AAudio : polyphonique, notes tenues, quatre timbres, enveloppe et clavier réglables.
+//! Simpletones : polyphonique, notes tenues, quatre timbres, enveloppe et clavier réglables.
 //!
 //! - Un doigt posé = une note tenue ; levé = relâche. Plusieurs doigts = accord.
 //! - Glisser d'une touche à l'autre change de note sans lever le doigt.
