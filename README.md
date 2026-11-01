@@ -3,11 +3,11 @@
 Petit synthétiseur pour Android, écrit en Rust sans aucune dépendance. L'APK
 fait environ 200 Ko.
 
-![Interface de Simpletones : diagnostic audio, curseurs et clavier](docs/screenshot.png)
+![Interface de Simpletones : diagnostic audio, timbres, curseurs et clavier](docs/screenshot.png)
 
 ## Télécharger
 
-**[Télécharger l'APK (version 0.5)](https://github.com/s1pierro/simpletones/releases/download/v0.5/synthe-aaudio-0.5.apk)**
+**[Télécharger l'APK (version 0.6)](https://github.com/s1pierro/simpletones/releases/download/v0.6/synthe-aaudio-0.6.apk)**
 
 Pour les appareils ARM 64 bits, sous Android 8.0 ou plus récent. L'APK étant
 signé avec une clé de debug, Android demandera d'autoriser l'installation depuis
