@@ -1,7 +1,7 @@
 # Simpletones
 
 Petit synthétiseur pour Android, écrit en Rust sans aucune dépendance. L'APK
-fait moins de 200 Ko.
+fait environ 200 Ko.
 
 ![Interface de Simpletones : diagnostic audio, curseurs et clavier](docs/screenshot.png)
 
@@ -17,6 +17,8 @@ une source inconnue.
 
 - Clavier tactile réglable : note la plus basse (à partir de Do1) et étendue
   (de 5 à 29 touches blanches, jusqu'à Do8), de Do4 à Do6 par défaut
+- Quatre timbres synthétisés en direct : orgue, corde pincée (Karplus-Strong),
+  piano électrique (FM) et lead (dents de scie filtrées)
 - Curseurs d'attaque et de relâche
 - Son via AAudio, chargé à l'exécution avec `dlopen`
 - Interface dessinée en logiciel dans une `NativeActivity`

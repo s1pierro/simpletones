@@ -3,7 +3,8 @@
 //!
 //! Disposition (paysage) :
 //!   ┌────────────────────────┬───────────────┐
-//!   │ diagnostic audio       │ curseur ATTAQUE│
+//!   │ diagnostic audio       │ boutons TIMBRE │
+//!   │                        │ curseur ATTAQUE│
 //!   │                        │ curseur RELACHE│
 //!   │                        │ curseur NOTE BASSE
 //!   │                        │ curseur ETENDUE│
@@ -13,6 +14,7 @@
 
 use crate::audio::Stats;
 use crate::font;
+use crate::synth::TIMBRES;
 
 /// Pixels RGBA_8888 lus en u32 little-endian : 0xAABBGGRR.
 const fn rgb(r: u8, g: u8, b: u8) -> u32 {
@@ -159,6 +161,8 @@ fn fmt_time(s: f32) -> String {
     if s >= 1.0 { format!("{s:.2} S") } else { format!("{:.0} MS", s * 1000.0) }
 }
 
+const TIMBRE_NAMES: [&str; TIMBRES] = ["ORGUE", "CORDE", "PIANO", "LEAD"];
+
 // ---------------------------------------------------------------------------
 // Disposition et zones tactiles
 // ---------------------------------------------------------------------------
@@ -186,6 +190,9 @@ pub struct Layout {
     /// Zone tactile de chaque curseur (généreuse) et sa piste visible.
     pub slider_zone: [Rect; SLIDERS],
     pub slider_track: [Rect; SLIDERS],
+    /// Zone tactile de chaque bouton de timbre (toute la rangée) et son rectangle visible.
+    pub timbre_zone: [Rect; TIMBRES],
+    pub timbre_button: [Rect; TIMBRES],
     pub kb: Keyboard,
     /// Rectangle visible de chaque touche, indexé depuis la note la plus grave.
     pub keys: [Rect; MAX_KEYS],
@@ -202,15 +209,26 @@ pub fn layout(w: usize, h: usize, kb: Keyboard) -> Layout {
 
     let sx = w * 62 / 100;
     let sw = w.saturating_sub(sx + margin);
-    let row_h = kb_top / SLIDERS;
+    // Une rangée pour les timbres, puis une par curseur.
+    let row_h = kb_top / (SLIDERS + 1);
     let label_h = (font::H + 4) * scale;
     let track_h = (3 * scale).max(6);
     let mut slider_zone = [Rect { x: 0, y: 0, w: 0, h: 0 }; SLIDERS];
     let mut slider_track = slider_zone;
     for i in 0..SLIDERS {
-        let ry = i * row_h;
+        let ry = (i + 1) * row_h;
         slider_zone[i] = Rect { x: sx, y: ry, w: w - sx, h: row_h };
         slider_track[i] = Rect { x: sx, y: ry + margin / 4 + label_h + scale, w: sw, h: track_h };
+    }
+
+    let mut timbre_zone = [Rect { x: 0, y: 0, w: 0, h: 0 }; TIMBRES];
+    let mut timbre_button = timbre_zone;
+    let button_gap = scale;
+    let button_w = sw.saturating_sub((TIMBRES - 1) * button_gap) / TIMBRES;
+    for i in 0..TIMBRES {
+        let x = sx + i * (button_w + button_gap);
+        timbre_zone[i] = Rect { x: x - if i == 0 { 0 } else { button_gap }, y: 0, w: button_w + button_gap, h: row_h };
+        timbre_button[i] = Rect { x, y: margin / 4, w: button_w, h: row_h.saturating_sub(margin / 2) };
     }
 
     // Clavier : blanches sur toute la hauteur, noires sur ~60 % en haut,
@@ -234,13 +252,14 @@ pub fn layout(w: usize, h: usize, kb: Keyboard) -> Layout {
             Rect { x: edge(j) + gap, y: kb_top + gap, w: key_w, h: kb_h.saturating_sub(2 * gap) }
         };
     }
-    Layout { w, h, scale, margin, kb_top, slider_zone, slider_track, kb, keys, count, gap }
+    Layout { w, h, scale, margin, kb_top, slider_zone, slider_track, timbre_zone, timbre_button, kb, keys, count, gap }
 }
 
 pub enum Hit {
     Key(usize),
     /// Curseur et position 0..1 sur sa piste.
     Slider(usize, f32),
+    Timbre(usize),
     Nothing,
 }
 
@@ -257,6 +276,9 @@ impl Layout {
             }
             let j = (x.max(0.0) as usize * self.kb.whites / self.w).min(self.kb.whites - 1);
             return Hit::Key(white_semi(self.kb.low + j));
+        }
+        if let Some(i) = (0..TIMBRES).find(|&i| self.timbre_zone[i].contains(x, y)) {
+            return Hit::Timbre(i);
         }
         for i in 0..SLIDERS {
             if self.slider_zone[i].contains(x, y) {
@@ -281,6 +303,7 @@ pub struct View {
     /// Valeurs des curseurs de durée, en secondes.
     pub sliders: [f32; TIME_SLIDERS],
     pub kb: Keyboard,
+    pub timbre: usize,
 }
 
 pub struct Canvas<'a> {
@@ -370,6 +393,17 @@ pub fn render(cv: &mut Canvas, st: &Stats, view: &View) {
     let top = view.kb.low + view.kb.whites - 1;
     let clavier = format!("{} A {} - NOTES TENUES : {}", white_name(view.kb.low), white_name(top), view.held_count);
     put(cv, &mut y, &clavier, if view.held_count > 0 { ACCENT } else { DIM });
+
+    // --- Timbres ----------------------------------------------------------
+    for i in 0..TIMBRES {
+        let button = l.timbre_button[i];
+        let selected = view.timbre == i;
+        cv.rect(button, if selected { ACCENT } else { KEY_ALT });
+        let name = TIMBRE_NAMES[i];
+        let nx = button.x + button.w.saturating_sub(text_width(name, scale)) / 2;
+        let ny = button.y + button.h.saturating_sub(font::H * scale) / 2;
+        cv.text(nx, ny, name, scale, if selected { BG } else { TEXT });
+    }
 
     // --- Curseurs ---------------------------------------------------------
     for i in 0..SLIDERS {
@@ -508,13 +542,32 @@ mod tests {
     }
 
     #[test]
+    fn boutons_de_timbre_touchables_et_lisibles() {
+        for (w, h) in [(2000, 1200), (1920, 1200), (2400, 1080), (800, 480)] {
+            let l = layout(w, h, Keyboard::DEFAULT);
+            for i in 0..TIMBRES {
+                let b = l.timbre_button[i];
+                assert!(b.x + b.w <= w && b.y + b.h <= l.slider_zone[0].y, "{w}x{h} bouton {i}");
+                assert!(text_width(TIMBRE_NAMES[i], l.scale) <= b.w, "{w}x{h} bouton {i}");
+                let (cx, cy) = ((b.x + b.w / 2) as f32, (b.y + b.h / 2) as f32);
+                assert!(matches!(l.hit(cx, cy), Hit::Timbre(t) if t == i), "{w}x{h} bouton {i}");
+            }
+            // Le texte des curseurs ne déborde pas sur la rangée suivante.
+            for i in 0..SLIDERS {
+                let t = l.slider_track[i];
+                assert!(t.y + t.h <= l.slider_zone[i].y + l.slider_zone[i].h, "{w}x{h} curseur {i}");
+            }
+        }
+    }
+
+    #[test]
     fn rendu_sans_debordement() {
         let st = Stats::default();
         for (w, h) in [(2000, 1200), (800, 480)] {
             for kb in all_keyboards() {
                 let mut px = vec![0u32; w * h];
                 let mut cv = Canvas { px: &mut px, w, h, stride: w };
-                let view = View { held: [true; NOTES], held_count: 3, sliders: [0.01, 0.4], kb };
+                let view = View { held: [true; NOTES], held_count: 3, sliders: [0.01, 0.4], kb, timbre: 1 };
                 render(&mut cv, &st, &view);
             }
         }

@@ -1,8 +1,8 @@
-//! Synthé AAudio : polyphonique, notes tenues, enveloppe et clavier réglables.
+//! Synthé AAudio : polyphonique, notes tenues, quatre timbres, enveloppe et clavier réglables.
 //!
 //! - Un doigt posé = une note tenue ; levé = relâche. Plusieurs doigts = accord.
 //! - Glisser d'une touche à l'autre change de note sans lever le doigt.
-//! - Curseurs ATTAQUE, RELACHE, NOTE BASSE et ETENDUE en haut à droite.
+//! - Boutons de timbre et curseurs ATTAQUE, RELACHE, NOTE BASSE, ETENDUE en haut à droite.
 //!
 //! Trois threads :
 //! - principal : événements tactiles → file sans verrou vers l'audio (aucun dessin ici,
@@ -137,6 +137,7 @@ struct Input {
     fingers: [Finger; MAX_POINTERS],
     sliders: [f32; ui::TIME_SLIDERS],
     kb: ui::Keyboard,
+    timbre: usize,
 }
 
 static INPUT: Mutex<Input> = Mutex::new(Input {
@@ -145,6 +146,7 @@ static INPUT: Mutex<Input> = Mutex::new(Input {
     fingers: [Finger::Up; MAX_POINTERS],
     sliders: [0.01, 0.4], // mêmes valeurs par défaut que le synthé
     kb: ui::Keyboard::DEFAULT,
+    timbre: 0,
 });
 
 /// Quelque chose a changé à l'écran : le thread de rendu redessinera.
@@ -160,7 +162,7 @@ impl Input {
                 held_count += 1;
             }
         }
-        ui::View { held, held_count, sliders: self.sliders, kb: self.kb }
+        ui::View { held, held_count, sliders: self.sliders, kb: self.kb, timbre: self.timbre }
     }
 
     fn set_slider(&mut self, i: usize, t: f32) {
@@ -174,6 +176,12 @@ impl Input {
         } else {
             self.kb = self.kb.with_slider(i, t);
         }
+        DIRTY.store(true, Ordering::Relaxed);
+    }
+
+    fn set_timbre(&mut self, i: usize) {
+        self.timbre = i;
+        synth::set_timbre(i);
         DIRTY.store(true, Ordering::Relaxed);
     }
 
@@ -195,6 +203,10 @@ impl Input {
             (_, ui::Hit::Slider(i, t)) if is_down => {
                 self.set_slider(i, t);
                 Finger::Slider(i)
+            }
+            (_, ui::Hit::Timbre(i)) if is_down => {
+                self.set_timbre(i);
+                Finger::Up
             }
             (_, ui::Hit::Key(k)) => Finger::Key(k),
             _ => Finger::Up,
@@ -238,7 +250,8 @@ impl Input {
 // Réglages du clavier, conservés d'un lancement à l'autre
 // ---------------------------------------------------------------------------
 
-/// Fichier texte « <rang de la note basse> <nombre de blanches> ».
+/// Fichier texte « <rang de la note basse> <nombre de blanches> <timbre> ».
+/// Le timbre est absent des fichiers écrits par la version 0.5.
 static CONFIG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 fn load_config(dir: *const i8) {
@@ -249,16 +262,23 @@ fn load_config(dir: *const i8) {
     if let Ok(text) = std::fs::read_to_string(&path) {
         let mut nums = text.split_whitespace().map(str::parse::<usize>);
         if let (Some(Ok(low)), Some(Ok(whites))) = (nums.next(), nums.next()) {
-            INPUT.lock().unwrap().kb = ui::Keyboard::sanitized(low, whites);
+            let mut input = INPUT.lock().unwrap();
+            input.kb = ui::Keyboard::sanitized(low, whites);
+            if let Some(Ok(timbre)) = nums.next() {
+                input.set_timbre(timbre.min(synth::TIMBRES - 1));
+            }
         }
     }
     *CONFIG_PATH.lock().unwrap() = Some(path);
 }
 
 fn save_config() {
-    let kb = INPUT.lock().unwrap().kb;
+    let (kb, timbre) = {
+        let input = INPUT.lock().unwrap();
+        (input.kb, input.timbre)
+    };
     if let Some(path) = &*CONFIG_PATH.lock().unwrap() {
-        let _ = std::fs::write(path, format!("{} {}\n", kb.low, kb.whites));
+        let _ = std::fs::write(path, format!("{} {} {timbre}\n", kb.low, kb.whites));
     }
 }
 
