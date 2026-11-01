@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Premier plan 108×108 : tout le motif tient dans la zone sûre centrale de 66×66
+     (de 21 à 87), que les lanceurs ne découpent jamais.
+     Couleurs reprises de src/ui.rs : TEXT, KEY_BLACK, ACCENT. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Onde sinusoïdale -->
+    <path
+        android:pathData="M27,38 Q33.75,26 40.5,38 T54,38 T67.5,38 T81,38"
+        android:strokeColor="#4C9EF2"
+        android:strokeWidth="4"
+        android:strokeLineCap="round" />
+
+    <!-- Touches blanches -->
+    <path
+        android:fillColor="#E6E8EC"
+        android:pathData="M27,50 H44 V76 Q44,78 42,78 H29 Q27,78 27,76 Z" />
+    <path
+        android:fillColor="#E6E8EC"
+        android:pathData="M45.5,50 H62.5 V76 Q62.5,78 60.5,78 H47.5 Q45.5,78 45.5,76 Z" />
+    <path
+        android:fillColor="#E6E8EC"
+        android:pathData="M64,50 H81 V76 Q81,78 79,78 H66 Q64,78 64,76 Z" />
+
+    <!-- Touches noires -->
+    <path
+        android:fillColor="#0B0C10"
+        android:pathData="M40.25,50 H49.25 V65 Q49.25,67 47.25,67 H42.25 Q40.25,67 40.25,65 Z" />
+    <path
+        android:fillColor="#0B0C10"
+        android:pathData="M58.75,50 H67.75 V65 Q67.75,67 65.75,67 H60.75 Q58.75,67 58.75,65 Z" />
+</vector>
